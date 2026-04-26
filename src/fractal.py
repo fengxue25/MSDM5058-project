@@ -4,556 +4,334 @@ Hurst Exponent, DFA, Multifractal Analysis
 """
 
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats
-from scipy.optimize import curve_fit
 import warnings
 warnings.filterwarnings('ignore')
 
 try:
-    import nolds
-    NOLDS_AVAILABLE = True
-except Exception:
-    NOLDS_AVAILABLE = False
-    print("Warning: nolds not available. Using built-in Hurst calculation.")
-
-try:
     from MFDFA import MFDFA
-    MFdfa_AVAILABLE = True
-except ImportError:
-    MFdfa_AVAILABLE = False
+    MFDFA_AVAILABLE = True
+except Exception:
+    MFDFA_AVAILABLE = False
     print("Warning: MFDFA not installed. Some functions may not work.")
 
 
 def hurst_exponent(series, max_lag=None, method='rs'):
-    """
-    Compute Hurst exponent using R/S analysis
-
-    Parameters:
-    -----------
-    series : array-like
-        Time series
-    max_lag : int
-        Maximum lag/window size
-    method : str
-        'rs' for R/S analysis, 'nolds' for nolds library
-
-    Returns:
-    --------
-    dict : Hurst exponent and related results
-    """
-    series = np.array(series).flatten()
+    series = np.asarray(series, dtype=float).flatten()
+    series = series[np.isfinite(series)]
     n = len(series)
+    if n < 50:
+        raise ValueError('series too short for Hurst estimation')
 
     if max_lag is None:
-        max_lag = n // 10
+        max_lag = max(20, n // 10)
 
-    if method == 'nolds' and NOLDS_AVAILABLE:
-        H = nolds.hurst_rs(series)
-        print(f"Hurst Exponent (nolds): H = {H:.4f}")
-        return {'H': H, 'method': 'nolds'}
-
-    # R/S Analysis implementation
     lags = np.unique(np.logspace(np.log10(10), np.log10(max_lag), 30).astype(int))
-    rs_values = []
+    rs_vals = []
+    valid_lags = []
 
     for lag in lags:
-        # Split series into chunks
         n_chunks = n // lag
-        if n_chunks < 1:
+        if n_chunks < 2:
             continue
-
-        rs_chunk = []
+        chunk_rs = []
         for i in range(n_chunks):
-            chunk = series[i*lag:(i+1)*lag]
-
-            # Calculate R/S
+            chunk = series[i * lag:(i + 1) * lag]
             mean_chunk = np.mean(chunk)
-            deviations = np.cumsum(chunk - mean_chunk)
-            R = np.max(deviations) - np.min(deviations)
+            dev = np.cumsum(chunk - mean_chunk)
+            R = np.max(dev) - np.min(dev)
             S = np.std(chunk, ddof=1)
+            if np.isfinite(R) and np.isfinite(S) and S > 0:
+                chunk_rs.append(R / S)
+        if chunk_rs:
+            rs_vals.append(np.mean(chunk_rs))
+            valid_lags.append(lag)
 
-            if S > 0:
-                rs_chunk.append(R / S)
-
-        if rs_chunk:
-            rs_values.append(np.mean(rs_chunk))
-
-    lags = lags[:len(rs_values)]
-    rs_values = np.array(rs_values)
-
-    # Fit log(R/S) = H * log(n) + c
-    log_lags = np.log(lags)
-    log_rs = np.log(rs_values)
-
-    slope, intercept, r_value, p_value, std_err = stats.linregress(log_lags, log_rs)
-
-    results = {
+    valid_lags = np.asarray(valid_lags)
+    rs_vals = np.asarray(rs_vals)
+    log_lags = np.log(valid_lags)
+    log_rs = np.log(rs_vals)
+    slope, intercept, r_value, _, _ = stats.linregress(log_lags, log_rs)
+    return {
         'H': slope,
         'intercept': intercept,
-        'r_squared': r_value**2,
-        'lags': lags,
-        'rs_values': rs_values,
+        'r_squared': r_value ** 2,
+        'lags': valid_lags,
+        'rs_values': rs_vals,
         'method': 'rs'
     }
 
-    print(f"\nHurst Exponent (R/S Analysis): H = {slope:.4f}")
-    print(f"R-squared: {r_value**2:.4f}")
 
-    if slope < 0.5:
-        print("Interpretation: Mean-reverting series (H < 0.5)")
-    elif slope > 0.5:
-        print("Interpretation: Trending/persistent series (H > 0.5)")
-    else:
-        print("Interpretation: Random walk (H ≈ 0.5)")
-
-    return results
-
-
-def plot_hurst(results, figsize=(10, 6)):
-    """
-    Plot R/S analysis result
-
-    Parameters:
-    -----------
-    results : dict
-        Results from hurst_exponent()
-    figsize : tuple
-        Figure size
-
-    Returns:
-    --------
-    matplotlib.figure.Figure
-    """
+def plot_hurst(results, title="",figsize=(10, 6)):
     fig, ax = plt.subplots(figsize=figsize)
-
-    lags = results['lags']
-    rs_values = results['rs_values']
-    H = results['H']
-
-    log_lags = np.log(lags)
-    log_rs = np.log(rs_values)
-
-    # Scatter plot
+    log_lags = np.log(results['lags'])
+    log_rs = np.log(results['rs_values'])
     ax.scatter(log_lags, log_rs, alpha=0.7, label='R/S values')
-
-    # Fit line
-    x_fit = np.linspace(min(log_lags), max(log_lags), 100)
-    y_fit = results['intercept'] + H * x_fit
-    ax.plot(x_fit, y_fit, 'r-', linewidth=2, label=f'Fit: H = {H:.4f}')
-
-    ax.set_xlabel('log(n)', fontsize=12)
-    ax.set_ylabel('log(R/S)', fontsize=12)
-    ax.set_title(f'Rescaled Range Analysis: R(n) ∝ n^H', fontsize=14)
+    x_fit = np.linspace(log_lags.min(), log_lags.max(), 100)
+    y_fit = results['intercept'] + results['H'] * x_fit
+    ax.plot(x_fit, y_fit, 'r-', lw=2, label=f"Fit: H = {results['H']:.4f}")
+    ax.set_xlabel('log(n)')
+    ax.set_ylabel('log(R/S)')
+    ax.set_title(f'{title} \nRescaled Range Analysis: R/S ∝ n^H')
     ax.legend()
     ax.grid(True, alpha=0.3)
-
     plt.tight_layout()
     return fig
 
 
 def dfa_analysis(series, scales=None, order=1):
-    """
-    Detrended Fluctuation Analysis
-
-    Parameters:
-    -----------
-    series : array-like
-        Time series
-    scales : array-like
-        Window sizes for DFA
-    order : int
-        Detrending order (1=linear, 2=quadratic)
-
-    Returns:
-    --------
-    dict : DFA results including scaling exponent alpha
-    """
-    series = np.array(series).flatten()
+    series = np.asarray(series, dtype=float).flatten()
+    series = series[np.isfinite(series)]
     n = len(series)
+    if n < 50:
+        raise ValueError('series too short for DFA')
 
     if scales is None:
-        scales = np.unique(np.logspace(np.log10(10), np.log10(n//10), 30).astype(int))
+        scales = np.unique(np.logspace(np.log10(10), np.log10(n // 10), 30).astype(int))
 
-    # Compute cumulative sum
     y = np.cumsum(series - np.mean(series))
-
     fluctuations = []
+    valid_scales = []
 
     for scale in scales:
         n_segments = n // scale
-        if n_segments < 1:
+        if n_segments < 2:
             continue
-
         rms = []
+        x = np.arange(scale)
         for i in range(n_segments):
-            segment = y[i*scale:(i+1)*scale]
-            x = np.arange(scale)
-
-            # Fit polynomial
+            segment = y[i * scale:(i + 1) * scale]
             coeffs = np.polyfit(x, segment, order)
             trend = np.polyval(coeffs, x)
-
-            # Detrend and compute RMS
             detrended = segment - trend
-            rms.append(np.sqrt(np.mean(detrended**2)))
+            val = np.sqrt(np.mean(detrended ** 2))
+            if np.isfinite(val) and val > 0:
+                rms.append(val)
+        if rms:
+            fluctuations.append(np.mean(rms))
+            valid_scales.append(scale)
 
-        fluctuations.append(np.mean(rms))
-
-    scales = scales[:len(fluctuations)]
-    fluctuations = np.array(fluctuations)
-
-    # Fit log(F) = alpha * log(n) + c
-    log_scales = np.log(scales)
+    valid_scales = np.asarray(valid_scales)
+    fluctuations = np.asarray(fluctuations)
+    log_scales = np.log(valid_scales)
     log_fluct = np.log(fluctuations)
-
-    slope, intercept, r_value, p_value, std_err = stats.linregress(log_scales, log_fluct)
-
-    results = {
+    slope, intercept, r_value, _, _ = stats.linregress(log_scales, log_fluct)
+    return {
         'alpha': slope,
         'intercept': intercept,
-        'r_squared': r_value**2,
-        'scales': scales,
+        'r_squared': r_value ** 2,
+        'scales': valid_scales,
         'fluctuations': fluctuations,
         'order': order
     }
 
-    print(f"\nDFA Scaling Exponent: α = {slope:.4f}")
-    print(f"R-squared: {r_value**2:.4f}")
 
-    # Relationship between H and alpha
-    H_estimated = slope - 0.5 if slope < 1 else slope
-    print(f"Estimated Hurst exponent from DFA: H ≈ {H_estimated:.4f}")
-
-    return results
-
-
-def plot_dfa(results, figsize=(10, 6)):
-    """
-    Plot DFA results
-
-    Parameters:
-    -----------
-    results : dict
-        Results from dfa_analysis()
-    figsize : tuple
-        Figure size
-
-    Returns:
-    --------
-    matplotlib.figure.Figure
-    """
+def plot_dfa(results,title ="", figsize=(10, 6)):
     fig, ax = plt.subplots(figsize=figsize)
-
-    scales = results['scales']
-    fluctuations = results['fluctuations']
-    alpha = results['alpha']
-
-    log_scales = np.log(scales)
-    log_fluct = np.log(fluctuations)
-
-    # Scatter plot
+    log_scales = np.log(results['scales'])
+    log_fluct = np.log(results['fluctuations'])
     ax.scatter(log_scales, log_fluct, alpha=0.7, label='F(n) values')
-
-    # Fit line
-    x_fit = np.linspace(min(log_scales), max(log_scales), 100)
-    y_fit = results['intercept'] + alpha * x_fit
-    ax.plot(x_fit, y_fit, 'r-', linewidth=2, label=f'Fit: α = {alpha:.4f}')
-
-    ax.set_xlabel('log(n)', fontsize=12)
-    ax.set_ylabel('log(F(n))', fontsize=12)
-    ax.set_title(f'Detrended Fluctuation Analysis: F(n) ∝ n^α', fontsize=14)
+    x_fit = np.linspace(log_scales.min(), log_scales.max(), 100)
+    y_fit = results['intercept'] + results['alpha'] * x_fit
+    ax.plot(x_fit, y_fit, 'r-', lw=2, label=f"Fit: α = {results['alpha']:.4f}")
+    ax.set_xlabel('log(n)')
+    ax.set_ylabel('log(F(n))')
+    ax.set_title(f'{title} \nDetrended Fluctuation Analysis: F(n) ∝ n^α')
     ax.legend()
     ax.grid(True, alpha=0.3)
-
     plt.tight_layout()
     return fig
 
 
-def multifractal_analysis(prices, q_values=None, tau_values=None):
-    """
-    Multifractal analysis using absolute moments
+def multifractal_analysis(prices_or_log_prices, q_values=None, tau_values=None, input_is_log_price=False, eps=1e-12):
+    y = np.asarray(prices_or_log_prices, dtype=float).flatten()
+    y = y[np.isfinite(y)]
+    if not input_is_log_price:
+        if np.any(y <= 0):
+            raise ValueError('price series must be positive when input_is_log_price=False')
+        y = np.log(y)
 
-    M(q,τ) = <|Y(t+τ) - Y(t)|^q> ∝ τ^{f(q)/q}
-
-    Parameters:
-    -----------
-    prices : array-like
-        Price series (will use log(S))
-    q_values : array-like
-        Order values
-    tau_values : array-like
-        Time lag values
-
-    Returns:
-    --------
-    dict : Multifractal analysis results
-    """
-    Y = np.log(np.array(prices).flatten())
-    n = len(Y)
+    n = len(y)
+    if n < 100:
+        raise ValueError('series too short for multifractal structure-function analysis')
 
     if q_values is None:
-        q_values = np.arange(1, 11)
+        q_values = np.array([1.0, 2.0, 3.0, 4.0])
+    q_values = np.asarray(q_values, dtype=float)
+    if np.any(np.isclose(q_values, 0.0)):
+        raise ValueError('q=0 is not supported in this structure-function implementation')
 
     if tau_values is None:
-        tau_values = np.unique(np.logspace(np.log10(1), np.log10(n//10), 30).astype(int))
+        tau_values = np.unique(np.logspace(np.log10(5), np.log10(max(10, n // 20)), 20).astype(int))
+    tau_values = np.asarray(tau_values, dtype=int)
+    tau_values = tau_values[tau_values > 0]
 
-    # Calculate M(q, τ)
-    M = np.zeros((len(q_values), len(tau_values)))
+    M = np.full((len(q_values), len(tau_values)), np.nan)
+    zeta = np.full(len(q_values), np.nan)
+    r2 = np.full(len(q_values), np.nan)
 
     for i, q in enumerate(q_values):
-        for j, tau in enumerate(tau_values):
-            increments = np.abs(Y[tau:] - Y[:-tau])
-            M[i, j] = np.mean(increments ** q)
+        vals = []
+        valid_tau = []
+        for tau in tau_values:
+            if tau >= n:
+                continue
+            increments = np.abs(y[tau:] - y[:-tau])
+            increments = np.maximum(increments, eps)
+            moment = np.mean(increments ** q)
+            if np.isfinite(moment) and moment > 0:
+                vals.append(moment)
+                valid_tau.append(tau)
+        if len(vals) >= 3:
+            valid_tau = np.asarray(valid_tau)
+            vals = np.asarray(vals)
+            cols = np.searchsorted(tau_values, valid_tau)
+            M[i, cols] = vals
+            slope, intercept, r_value, _, _ = stats.linregress(np.log(valid_tau), np.log(vals))
+            zeta[i] = slope
+            r2[i] = r_value ** 2
 
-    # Calculate f(q)/q from scaling
-    f_over_q = []
-    for i, q in enumerate(q_values):
-        log_tau = np.log(tau_values)
-        log_M = np.log(M[i, :])
-
-        # Linear fit
-        slope, intercept, r_value, _, _ = stats.linregress(log_tau, log_M)
-        f_over_q.append(slope)
-
-    f_values = np.array(f_over_q) * np.array(q_values)
-
-    results = {
+    return {
         'q_values': q_values,
         'tau_values': tau_values,
         'M': M,
-        'f_over_q': np.array(f_over_q),
-        'f_values': f_values
+        'zeta_q': zeta,
+        'f_over_q': zeta / q_values,
+        'r_squared': r2
     }
 
-    print("\nMultifractal Analysis Results:")
-    print(f"f(1) ≈ {f_values[0]:.4f} (should be close to H)")
-    print(f"f(q) range: [{min(f_values):.4f}, {max(f_values):.4f}]")
 
-    if max(f_values) - min(f_values) > 0.1:
-        print("Series exhibits multifractality")
-    else:
-        print("Series is approximately monofractal")
-
-    return results
-
-
-def plot_multifractal(results, figsize=(14, 5)):
-    """
-    Plot multifractal analysis results
-
-    Parameters:
-    -----------
-    results : dict
-        Results from multifractal_analysis()
-    figsize : tuple
-        Figure size
-
-    Returns:
-    --------
-    matplotlib.figure.Figure
-    """
+def plot_multifractal(results, title ="", figsize=(14, 5)):
     fig, axes = plt.subplots(1, 2, figsize=figsize)
-
-    # Plot M(q,τ)^{1/q} vs τ
-    ax1 = axes[0]
+    ax1, ax2 = axes
     q_values = results['q_values']
     tau_values = results['tau_values']
     M = results['M']
 
-    for i, q in enumerate(q_values[::2]):  # Plot every other q for clarity
-        ax1.loglog(tau_values, M[i, :]**(1/q), 'o-', markersize=3, label=f'q={q}')
+    plot_idx = np.arange(len(q_values))[::max(1, len(q_values) // 6 or 1)]
+    for i in plot_idx:
+        q = q_values[i]
+        row = M[i, :]
+        valid = np.isfinite(row) & (row > 0)
+        if valid.sum() < 3:
+            continue
+        ax1.loglog(tau_values[valid], row[valid] ** (1.0 / q), 'o-', ms=3, label=f'q={q:g}')
 
-    ax1.set_xlabel('τ (time lag)', fontsize=12)
-    ax1.set_ylabel('M(q,τ)^{1/q}', fontsize=12)
-    ax1.set_title('Scaling of Absolute Moments', fontsize=14)
+    ax1.set_xlabel('τ (time lag)')
+    ax1.set_ylabel('M(q,τ)^(1/q)')
+    ax1.set_title(f'{title} Scaling of Absolute Moments')
     ax1.legend(loc='best')
     ax1.grid(True, alpha=0.3)
 
-    # Plot f(q)/q vs q
-    ax2 = axes[1]
-    ax2.plot(q_values, results['f_over_q'], 'bo-', markersize=8)
-    ax2.axhline(y=results['f_over_q'][0], color='r', linestyle='--', label=f'H ≈ {results["f_over_q"][0]:.4f}')
-    ax2.set_xlabel('q', fontsize=12)
-    ax2.set_ylabel('f(q)/q', fontsize=12)
-    ax2.set_title('Multifractal Spectrum', fontsize=14)
-    ax2.legend()
+    valid2 = np.isfinite(results['f_over_q'])
+    ax2.plot(q_values[valid2], results['f_over_q'][valid2], 'bo-', ms=7)
+    idx_q1 = np.argmin(np.abs(q_values - 1.0))
+    if np.isfinite(results['f_over_q'][idx_q1]) and np.isclose(q_values[idx_q1], 1.0):
+        h1 = results['f_over_q'][idx_q1]
+        ax2.axhline(h1, color='r', ls='--', label=f'q=1 slope ≈ {h1:.4f}')
+        ax2.legend()
+    ax2.set_xlabel('q')
+    ax2.set_ylabel('ζ(q)/q')
+    ax2.set_title(f'{title} Structure Function Scaling Exponent')
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
     return fig
 
 
-def mfdfa_analysis(series, q_values=None, scales=None):
-    """
-    Multifractal Detrended Fluctuation Analysis (MF-DFA)
-
-    Parameters:
-    -----------
-    series : array-like
-        Time series
-    q_values : array-like
-        Order values for MF-DFA
-    scales : array-like
-        Window sizes
-
-    Returns:
-    --------
-    dict : MF-DFA results
-    """
-    if not MFdfa_AVAILABLE:
-        print("MFDFA library not available. Using simplified implementation.")
-        return _simple_mfdfa(series, q_values, scales)
-
-    series = np.array(series).flatten()
+def mfdfa_analysis(series, q_values=None, scales=None, order=1):
+    x = np.asarray(series, dtype=float).flatten()
+    x = x[np.isfinite(x)]
+    n = len(x)
+    if n < 100:
+        raise ValueError('series too short for MF-DFA')
 
     if q_values is None:
-        q_values = np.linspace(-5, 5, 21)
-        q_values = q_values[q_values != 0]  # Remove q=0
+        q_values = np.array([1.0, 2.0, 3.0, 4.0])
+    q_values = np.asarray(q_values, dtype=float)
+    q_values = q_values[~np.isclose(q_values, 0.0)]
 
     if scales is None:
-        n = len(series)
-        scales = np.unique(np.logspace(np.log10(10), np.log10(n//10), 30).astype(int))
+        scales = np.unique(np.logspace(np.log10(10), np.log10(max(20, n // 10)), 24).astype(int))
+    scales = np.asarray(scales, dtype=int)
+    scales = scales[scales > order + 2]
 
-    # Run MF-DFA
-    lag, dfa = MFDFA(series, scales, q=q_values, order=1)
+    if MFDFA_AVAILABLE:
+        lag, dfa = MFDFA(x, scales, q=q_values, order=order)
+        alphas = []
+        for i in range(len(q_values)):
+            yy = dfa[:, i]
+            valid = np.isfinite(yy) & (yy > 0)
+            slope, _, _, _, _ = stats.linregress(np.log(lag[valid]), np.log(yy[valid]))
+            alphas.append(slope)
+        return {
+            'q_values': q_values,
+            'scales': np.asarray(lag),
+            'fluctuations': np.asarray(dfa),
+            'alphas': np.asarray(alphas)
+        }
 
-    # Extract scaling exponents
+    y = np.cumsum(x - np.mean(x))
+    F_q_all = []
     alphas = []
-    for i, q in enumerate(q_values):
-        log_lag = np.log(lag)
-        log_dfa = np.log(dfa[:, i])
-
-        valid = np.isfinite(log_dfa)
-        slope, _, _, _, _ = stats.linregress(log_lag[valid], log_dfa[valid])
-        alphas.append(slope)
-
-    results = {
-        'q_values': q_values,
-        'scales': lag,
-        'fluctuations': dfa,
-        'alphas': np.array(alphas)
-    }
-
-    print("\nMF-DFA Results:")
-    print(f"α(2) = {alphas[np.argmin(np.abs(q_values - 2))]:.4f}")
-    print(f"α range: [{min(alphas):.4f}, {max(alphas):.4f}]")
-
-    return results
-
-
-def _simple_mfdfa(series, q_values=None, scales=None):
-    """
-    Simplified MF-DFA implementation
-    """
-    series = np.array(series).flatten()
-    n = len(series)
-
-    if q_values is None:
-        q_values = np.array([-4, -2, -1, 1, 2, 4])
-
-    if scales is None:
-        scales = np.unique(np.logspace(np.log10(10), np.log10(n//10), 20).astype(int))
-
-    # Cumulative sum
-    y = np.cumsum(series - np.mean(series))
-
-    alphas = []
-    F_q = []
+    valid_scales_ref = None
 
     for q in q_values:
-        fluctuations = []
-        for scale in scales:
-            n_segments = n // scale
-            if n_segments < 1:
+        f_q_scales = []
+        valid_scales = []
+        for s in scales:
+            ns = n // s
+            if ns < 2:
                 continue
-
             rms = []
-            for i in range(n_segments):
-                segment = y[i*scale:(i+1)*scale]
-                x = np.arange(scale)
-
-                coeffs = np.polyfit(x, segment, 1)
-                trend = np.polyval(coeffs, x)
-                detrended = segment - trend
-
-                rms.append(np.sqrt(np.mean(detrended**2)))
-
-            rms = np.array(rms)
-            if q == 0:
-                f_q = np.exp(np.mean(np.log(rms)))
+            idx = np.arange(s)
+            for v in range(ns):
+                seg = y[v * s:(v + 1) * s]
+                coeffs = np.polyfit(idx, seg, order)
+                trend = np.polyval(coeffs, idx)
+                val = np.sqrt(np.mean((seg - trend) ** 2))
+                if np.isfinite(val) and val > 0:
+                    rms.append(val)
+            rms = np.asarray(rms)
+            if len(rms) < 2:
+                continue
+            if np.isclose(q, 0.0):
+                fq = np.exp(0.5 * np.mean(np.log(rms ** 2)))
             else:
-                f_q = (np.mean(rms**q))**(1/q)
-
-            fluctuations.append(f_q)
-
-        scales_valid = scales[:len(fluctuations)]
-        log_scales = np.log(scales_valid)
-        log_fluct = np.log(fluctuations)
-
-        slope, _, _, _, _ = stats.linregress(log_scales, log_fluct)
+                fq = (np.mean(rms ** q)) ** (1.0 / q)
+            if np.isfinite(fq) and fq > 0:
+                f_q_scales.append(fq)
+                valid_scales.append(s)
+        valid_scales = np.asarray(valid_scales)
+        f_q_scales = np.asarray(f_q_scales)
+        if len(f_q_scales) < 3:
+            alphas.append(np.nan)
+            F_q_all.append(f_q_scales)
+            continue
+        slope, _, _, _, _ = stats.linregress(np.log(valid_scales), np.log(f_q_scales))
         alphas.append(slope)
-        F_q.append(fluctuations)
+        F_q_all.append(f_q_scales)
+        if valid_scales_ref is None or len(valid_scales) < len(valid_scales_ref):
+            valid_scales_ref = valid_scales
 
     return {
         'q_values': q_values,
-        'scales': scales_valid,
-        'F_q': F_q,
-        'alphas': np.array(alphas)
+        'scales': valid_scales_ref,
+        'F_q': F_q_all,
+        'alphas': np.asarray(alphas)
     }
 
 
-def plot_mfdfa(results, figsize=(10, 6)):
-    """
-    Plot MF-DFA results
-
-    Parameters:
-    -----------
-    results : dict
-        Results from mfdfa_analysis()
-    figsize : tuple
-        Figure size
-
-    Returns:
-    --------
-    matplotlib.figure.Figure
-    """
+def plot_mfdfa(results, title="", figsize=(10, 6)):
     fig, ax = plt.subplots(figsize=figsize)
-
-    ax.plot(results['q_values'], results['alphas'], 'bo-', markersize=8)
-    ax.axhline(y=0.5, color='r', linestyle='--', alpha=0.5, label='Random walk (α=0.5)')
-    ax.set_xlabel('q', fontsize=12)
-    ax.set_ylabel('α(q)', fontsize=12)
-    ax.set_title('MF-DFA: Scaling Exponents vs Order', fontsize=14)
+    valid = np.isfinite(results['alphas'])
+    ax.plot(results['q_values'][valid], results['alphas'][valid], 'bo-', ms=8)
+    ax.axhline(0.5, color='r', ls='--', alpha=0.5, label='Random walk (α=0.5)')
+    ax.set_xlabel('q')
+    ax.set_ylabel('α(q)')
+    ax.set_title(f'{title} \nMF-DFA: Scaling Exponents vs Order')
     ax.legend()
     ax.grid(True, alpha=0.3)
-
     plt.tight_layout()
     return fig
-
-
-if __name__ == "__main__":
-    # Example with synthetic data
-    np.random.seed(42)
-    n = 5000
-
-    # Generate fractional Gaussian noise with H=0.7
-    H_true = 0.7
-    noise = np.random.randn(n)
-
-    # Simple method to create persistent series
-    series = np.zeros(n)
-    series[0] = noise[0]
-    for i in range(1, n):
-        series[i] = 0.7 * series[i-1] + 0.3 * noise[i]
-
-    # Test Hurst
-    H_results = hurst_exponent(series)
-    plot_hurst(H_results)
-    plt.show()
-
-    # Test DFA
-    dfa_results = dfa_analysis(series)
-    plot_dfa(dfa_results)
-    plt.show()

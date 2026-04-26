@@ -1,6 +1,8 @@
 """
 Part 1: Data Preprocessing
 Download stock data and compute daily returns
+
+Can be used indenpendently to only download the data
 """
 
 import numpy as np
@@ -42,42 +44,14 @@ def download_data(tickers, start_date, end_date, data_dir='data'):
         os.makedirs(data_dir, exist_ok=True)
         df.to_csv(f"{data_dir}/{ticker}.csv")
 
-        data[ticker] = df['Close']
+        data[ticker] = df['Close'].squeeze()
         print(f"{ticker}: {len(df)} days of data downloaded")
 
     return data
 
 
-def load_data(tickers, data_dir='data'):
-    """
-    Load stock data from CSV files
-
-    Parameters:
-    -----------
-    tickers : list
-        List of stock ticker symbols
-    data_dir : str
-        Directory containing data files
-
-    Returns:
-    --------
-    dict : Dictionary of Series with closing prices
-    """
-    data = {}
-
-    for ticker in tickers:
-        filepath = f"{data_dir}/{ticker}.csv"
-        if os.path.exists(filepath):
-            df = pd.read_csv(filepath, index_col=0, parse_dates=True)
-            data[ticker] = df['Close']
-            print(f"Loaded {ticker}: {len(data[ticker])} days")
-        else:
-            print(f"File not found: {filepath}")
-
-    return data
-
-
 def compute_returns(prices):
+    
     """
     Compute daily log returns
 
@@ -92,11 +66,13 @@ def compute_returns(prices):
     --------
     pd.Series : Daily log returns
     """
+    print("Computing the log_return...")
     returns = np.log(prices / prices.shift(1))
     return returns.dropna()
 
 
 def demean(returns):
+    
     """
     Subtract mean from returns
 
@@ -110,11 +86,12 @@ def demean(returns):
     pd.Series : Demeaned returns
     """
     mean = returns.mean()
-    print(f"Mean of returns: {mean:.6f}")
+    print(f"Mean of returns: {float(mean):.6f}")
     return returns - mean
 
 
-def preprocess_data(prices):
+def preprocess_data(prices,ticker,output_dir):
+    
     """
     Full preprocessing pipeline
 
@@ -129,11 +106,24 @@ def preprocess_data(prices):
     """
     returns = compute_returns(prices)
     demeaned_returns = demean(returns)
+    returns_centered = pd.Series(demeaned_returns, index=returns.index)
 
-    return prices, returns, demeaned_returns
+    # Create aligned data for saving
+    save_data = pd.DataFrame({
+        'Date': prices.index,
+        'Price': prices.values,
+    })
+    save_data['Returns'] = [np.nan] + list(returns.values)
+    save_data['Returns_Centered'] = [np.nan] + list(returns_centered.values)
+
+    # Drop NaN rows and save
+    save_data.dropna().to_csv(f"{output_dir}/data/{ticker}_processed.csv", index=False)
+    print(f"Saved data to csv: {output_dir}/data/{ticker}_processed.csv")
+
+    return prices, returns, returns_centered
 
 
-def plot_prices_and_returns(prices, returns, ticker, figsize=(14, 10)):
+def plot_prices_and_returns(prices, returns, ticker_name, figsize):
     """
     Plot price and return time series
 
@@ -152,17 +142,15 @@ def plot_prices_and_returns(prices, returns, ticker, figsize=(14, 10)):
 
     # Plot prices
     axes[0].plot(prices.index, prices.values, linewidth=0.8)
-    axes[0].set_title(f'{ticker} Daily Closing Prices', fontsize=14)
-    axes[0].set_xlabel('Date')
-    axes[0].set_ylabel('Price ($)')
+    axes[0].set_title(f'{ticker_name}', fontsize=14)
+    axes[0].set_ylabel('Daily Closing Price S (USD)')
     axes[0].grid(True, alpha=0.3)
 
     # Plot returns
     axes[1].plot(returns.index, returns.values, linewidth=0.5, color='orange')
     axes[1].axhline(y=0, color='red', linestyle='--', alpha=0.5)
-    axes[1].set_title(f'{ticker} Daily Log Returns (Demeaned)', fontsize=14)
-    axes[1].set_xlabel('Date')
-    axes[1].set_ylabel('Return')
+    axes[1].set_xlabel('Year')
+    axes[1].set_ylabel('Daily Log Returns (Centered) X')
     axes[1].grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -171,9 +159,9 @@ def plot_prices_and_returns(prices, returns, ticker, figsize=(14, 10)):
 
 if __name__ == "__main__":
     # Example usage
-    tickers = ['AAPL', 'MSFT']
-    start_date = '2009-01-01'
-    end_date = '2024-01-01'
+    tickers = []
+    start_date = ''
+    end_date = ''
 
     # Download or load data
     data = download_data(tickers, start_date, end_date)
