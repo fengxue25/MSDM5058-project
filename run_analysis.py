@@ -27,7 +27,7 @@ from src.fractal import (
     mfdfa_analysis,
     plot_mfdfa,
 )
-from src.granger_fixed import analyze_granger
+from src.granger import analyze_granger
 from src.fourier import (
     fourier_transform,
     power_spectrum,
@@ -68,7 +68,11 @@ def analyze_single_stock(ticker, ticker_name, prices, returns_centered, output_d
         f"{output_dir}/figures/{ticker}_acf_absolute.png", dpi=300, bbox_inches="tight"
     )
     plt.close(fig2)
-    guess_order = (1, 1)
+    if ticker == "KO":
+        guess_order = (4, 4)
+    else:
+        guess_order = (1, 1)
+        
     compare_arma(returns_centered, guess_order)
 
     # ARMA order selection heatmap
@@ -266,7 +270,6 @@ def main():
     print("MSDM5058 Project I - Financial Time Series Analysis")
     directories = AnalysisConfig.get_directories()
     output_dir = directories[0]
-    # output_dir = os.path.dirname(directories[0])
     print(f"output_dir : {output_dir}")
 
     os.makedirs(f"{output_dir}/data", exist_ok=True)
@@ -301,18 +304,18 @@ def main():
         )
         all_results.append(results)
 
-    # print("\n[Part 4] Granger Causality Analysis...")
-    # analyze_granger(
-    #     [tickers[0]],
-    #     stocks_data[tickers[1]],
-    #     tickers[0],
-    #     tickers[1],
-    #     output_dir,
-    #     max_ar=9,
-    #     max_ma=9,
-    #     max_lag=10,
-    # )
-    # print(f"\nAnalysis complete. Results saved to: {output_dir}")
+    print("\n[Part 4] Granger Causality Analysis...")
+    analyze_granger(
+        stocks_data[tickers[0]],
+        stocks_data[tickers[1]],
+        tickers[0],
+        tickers[1],
+        output_dir,
+        max_ar=9,
+        max_ma=9,
+        max_lag=10,
+    )
+    print(f"\nAnalysis complete. Results saved to: {output_dir}")
 
 
 if __name__ == "__main__":

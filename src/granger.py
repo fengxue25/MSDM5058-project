@@ -364,7 +364,7 @@ def analyze_granger(
     selection='bic',
     search_maxiter=50,
     final_maxiter=100,
-    timeout_sec=300,
+    timeout_sec=3600,
     verbose=True
 ):
     os.makedirs(f'{output_dir}/figures', exist_ok=True)
